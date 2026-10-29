@@ -3,6 +3,7 @@ module bandwidth-tracker
 go 1.27.3
 
 require (
+	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/shirou/gopsutil/v3 v3.24.5
 	golang.org/x/sys v0.49.0
 	modernc.org/sqlite v1.61.0

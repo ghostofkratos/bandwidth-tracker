@@ -34,6 +34,9 @@
     ],
     "android": {
       "debugApplicationIdSuffix": ".debug"
-    }
+    },
+    "externalBin": [
+      "../backend/bin/bandwidth-tracker-sidecar"
+    ]
   }
 }

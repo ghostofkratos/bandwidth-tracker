@@ -11,8 +11,10 @@ import (
 	"syscall"
 	"time"
 
+	"bandwidth-tracker/internal/aggregator"
 	"bandwidth-tracker/internal/collector"
 	"bandwidth-tracker/internal/db"
+	"bandwidth-tracker/internal/geoip"
 
 	_ "modernc.org/sqlite"
 )
@@ -22,9 +24,10 @@ func main() {
 	pollInterval := getEnvInt("POLL_INTERVAL_SECONDS", 5)
 	dbPath := getEnv("DB_PATH", defaultDBPath())
 	aggWindow := getEnvInt("AGGREGATION_WINDOW_SECONDS", 60)
+	aggInterval := getEnvInt("AGGREGATION_INTERVAL_MINUTES", 60)
 
 	log.Printf("Starting bandwidth-tracker backend on port %s", port)
-	log.Printf("Poll interval: %ds, DB: %s, Aggregation window: %ds", pollInterval, dbPath, aggWindow)
+	log.Printf("Poll interval: %ds, DB: %s, Aggregation window: %ds, Aggregation interval: %dm", pollInterval, dbPath, aggWindow, aggInterval)
 
 	database, err := db.Open(dbPath)
 	if err != nil {
@@ -33,13 +36,17 @@ func main() {
 	defer database.Close()
 
 	correlator := collector.NewCorrelator(database)
-	worker := collector.NewWorker(correlator, pollInterval)
+	collectorWorker := collector.NewWorker(correlator, pollInterval)
+	aggregatorWorker := aggregator.NewWorker(database, aggInterval)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	worker.Start(ctx)
+	collectorWorker.Start(ctx)
 	log.Printf("Collector worker started")
+
+	aggregatorWorker.Start(ctx)
+	log.Printf("Aggregation worker started")
 
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -63,6 +70,40 @@ func main() {
 		})
 	})
 
+	http.HandleFunc("/api/history", func(w http.ResponseWriter, r *http.Request) {
+		rangeStr := r.URL.Query().Get("range")
+		if rangeStr == "" {
+			rangeStr = "24h"
+		}
+
+		history, err := db.GetHistory(r.Context(), database, rangeStr)
+		if err != nil {
+			log.Printf("History error: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(history)
+	})
+
+	http.HandleFunc("/api/geoip/stats", func(w http.ResponseWriter, r *http.Request) {
+		rangeStr := r.URL.Query().Get("range")
+		if rangeStr == "" {
+			rangeStr = "24h"
+		}
+
+		stats, err := db.GetGeoIPStats(r.Context(), database, rangeStr)
+		if err != nil {
+			log.Printf("GeoIP stats error: %v", err)
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(stats)
+	})
+
 	server := &http.Server{Addr: ":" + port}
 
 	go func() {
@@ -77,7 +118,9 @@ func main() {
 
 	log.Printf("Shutting down...")
 	cancel()
-	worker.Stop()
+	collectorWorker.Stop()
+	aggregatorWorker.Stop()
+	geoip.Close()
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()

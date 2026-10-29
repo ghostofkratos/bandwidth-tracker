@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"bandwidth-tracker/internal/db"
+	"bandwidth-tracker/internal/geoip"
 )
 
 const (
@@ -60,17 +61,23 @@ func (c *Correlator) ProcessConnections(ctx context.Context, conns []Connection)
 			return fmt.Errorf("upsert process: %w", err)
 		}
 
+		countryCode := "XX"
+		if conn.RemoteIP != "" {
+			countryCode, _ = geoip.Lookup(ctx, conn.RemoteIP)
+		}
+
 		sample := &db.TrafficSample{
-			Timestamp:  now,
-			ProcessID:  proc.ID,
-			BytesIn:    bytesIn,
-			BytesOut:   bytesOut,
-			RemoteIP:   conn.RemoteIP,
-			RemotePort: int32(conn.RemotePort),
-			LocalIP:    conn.LocalIP,
-			LocalPort:  int32(conn.LocalPort),
-			Protocol:   conn.Protocol,
-			Estimated:  true,
+			Timestamp:   now,
+			ProcessID:   proc.ID,
+			BytesIn:     bytesIn,
+			BytesOut:    bytesOut,
+			RemoteIP:    conn.RemoteIP,
+			RemotePort:  int32(conn.RemotePort),
+			LocalIP:     conn.LocalIP,
+			LocalPort:   int32(conn.LocalPort),
+			Protocol:    conn.Protocol,
+			Estimated:   true,
+			CountryCode: countryCode,
 		}
 
 		if err := db.InsertSample(ctx, c.db, sample); err != nil {
@@ -93,10 +100,10 @@ func estimateBytes(prev, curr Connection, inbound bool) int64 {
 		}
 		return int64(mtuEstimate * packetsPerPollEst)
 	}
-	
+
 	if curr.Protocol == "udp" {
 		return int64(mtuEstimate * packetsPerPollEst / 2)
 	}
-	
+
 	return 0
 }
