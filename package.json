@@ -1,0 +1,42 @@
+{
+  "name": "bandwidth-tracker",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "lint": "eslint . --ext .ts,.tsx,.js,.cjs && prettier --check .",
+    "lint:fix": "eslint . --ext .ts,.tsx,.js,.cjs --fix && prettier --write .",
+    "lint:go": "cd backend && golangci-lint run",
+    "lint:rust": "cd src-tauri && cargo clippy -- -D warnings",
+    "lint:all": "pnpm lint && pnpm lint:go && pnpm lint:rust",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.16.1",
+      "onFail": "download"
+    }
+  },
+  "packageManager": "pnpm@12.16.1",
+  "type": "module",
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tauri-apps/api": "^2.12.4",
+    "@tauri-apps/cli": "^2.12.4",
+    "@types/node": "^26.6.5",
+    "eslint": "^10.13.0",
+    "eslint-plugin-import": "^2.32.0",
+    "prettier": "^3.9.10",
+    "typescript": "5.6.3",
+    "typescript-eslint": "^8.72.1",
+    "vite": "^8.3.5"
+  }
+}
