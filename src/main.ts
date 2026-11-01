@@ -4,6 +4,7 @@ interface Metrics {
   download: number;
   upload: number;
   apps: AppMetrics[];
+  estimated: boolean;
 }
 
 interface AppMetrics {
@@ -20,6 +21,7 @@ interface HistoryResponse {
   granularity: string;
   series: HistoryPoint[];
   apps: AppHistoryPoint[];
+  estimated: boolean;
 }
 
 interface HistoryPoint {
@@ -38,6 +40,7 @@ interface AppHistoryPoint {
 
 interface GeoIPStats {
   countries: CountryStats[];
+  estimated: boolean;
 }
 
 interface CountryStats {
@@ -52,31 +55,39 @@ async function invoke<T>(command: string, args?: Record<string, unknown>): Promi
   return invoke<T>(command, args);
 }
 
-async function loadMetrics() {
+async function loadMetrics(): Promise<boolean> {
   try {
     const metrics = await invoke<Metrics>('get_metrics');
     updateMetricsDisplay(metrics);
+    return true;
   } catch (error) {
     console.error('Failed to load metrics:', error);
     updateStatus(`Error: ${error}`);
+    return false;
   }
 }
 
-async function loadHistory(range: string = '24h') {
+async function loadHistory(range: string = '24h'): Promise<boolean> {
   try {
     const history = await invoke<HistoryResponse>('get_history', { range });
     updateHistoryDisplay(history);
+    return true;
   } catch (error) {
     console.error('Failed to load history:', error);
+    updateStatus(`History unavailable: ${error}`);
+    return false;
   }
 }
 
-async function loadGeoIPStats(range: string = '24h') {
+async function loadGeoIPStats(range: string = '24h'): Promise<boolean> {
   try {
     const stats = await invoke<GeoIPStats>('get_geoip_stats', { range });
     updateGeoIPDisplay(stats);
+    return true;
   } catch (error) {
     console.error('Failed to load GeoIP stats:', error);
+    updateStatus(`GeoIP totals unavailable: ${error}`);
+    return false;
   }
 }
 
@@ -84,12 +95,19 @@ function updateMetricsDisplay(metrics: Metrics) {
   const downloadEl = document.getElementById('download');
   const uploadEl = document.getElementById('upload');
   const appsEl = document.getElementById('apps');
+  const qualityEl = document.getElementById('data-quality');
+
+  if (qualityEl) {
+    qualityEl.textContent = metrics.estimated
+      ? 'Traffic values are estimates from active connections, not measured byte counters.'
+      : 'No traffic samples have been collected yet.';
+  }
 
   if (downloadEl) downloadEl.textContent = formatBytes(metrics.download) + '/s';
   if (uploadEl) uploadEl.textContent = formatBytes(metrics.upload) + '/s';
 
   if (appsEl) {
-    appsEl.innerHTML = metrics.apps
+    appsEl.innerHTML = (metrics.apps ?? [])
       .sort((a, b) => (b.download + b.upload) - (a.download + a.upload))
       .slice(0, 10)
       .map(app => `
@@ -108,7 +126,7 @@ function updateMetricsDisplay(metrics: Metrics) {
 function updateHistoryDisplay(history: HistoryResponse) {
   const seriesEl = document.getElementById('history-series');
   if (seriesEl) {
-    seriesEl.innerHTML = history.series
+    seriesEl.innerHTML = (history.series ?? [])
       .map(point => `
         <tr>
           <td>${new Date(point.timestamp).toLocaleTimeString()}</td>
@@ -117,12 +135,20 @@ function updateHistoryDisplay(history: HistoryResponse) {
         </tr>
       `).join('');
   }
+  const freshnessEl = document.getElementById('history-freshness');
+  if (freshnessEl) {
+    freshnessEl.textContent = history.range === '30d'
+      ? 'Daily totals are aggregated once per day; the current day appears after its daily rollup.'
+      : history.range === '1h'
+        ? 'This range uses recent samples.'
+        : 'Hourly totals are aggregated after each hour completes; the current hour appears in the next rollup.';
+  }
 }
 
 function updateGeoIPDisplay(stats: GeoIPStats) {
   const geoipEl = document.getElementById('geoip-stats');
   if (geoipEl) {
-    geoipEl.innerHTML = stats.countries
+    geoipEl.innerHTML = (stats.countries ?? [])
       .map(c => `
         <tr>
           <td>${c.country_code}</td>
@@ -135,10 +161,10 @@ function updateGeoIPDisplay(stats: GeoIPStats) {
 }
 
 function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const i = Math.max(0, Math.min(sizes.length - 1, Math.floor(Math.log(bytes) / Math.log(k))));
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
 }
 
@@ -152,6 +178,9 @@ if (app) {
   app.innerHTML = `
     <div style="padding: 2rem; font-family: system-ui, sans-serif; max-width: 1000px; margin: 0 auto;">
       <h1>Bandwidth Tracker</h1>
+      <p id="data-quality" style="margin-bottom: 1rem; color: #aab;">
+        Traffic values are estimates from active connections, not measured byte counters.
+      </p>
       
       <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
         <div style="background: #f5f5f5; padding: 1rem; border-radius: 8px;">
@@ -194,6 +223,7 @@ if (app) {
 
       <div style="margin-bottom: 2rem;">
         <h2>History (<span id="range-display">24h</span>)</h2>
+        <p id="history-freshness" style="margin: 0.5rem 0; color: #aab;"></p>
         <table style="width: 100%; border-collapse: collapse;">
           <thead>
             <tr style="background: #f5f5f5;">
@@ -226,29 +256,54 @@ if (app) {
   `;
 }
 
+async function refreshData(range?: string) {
+  const select = document.getElementById('range-select') as HTMLSelectElement;
+  const selectedRange = range ?? select.value;
+  const results = await Promise.all([
+    loadMetrics(),
+    loadHistory(selectedRange),
+    loadGeoIPStats(selectedRange),
+  ]);
+  const display = document.getElementById('range-display');
+  if (display) display.textContent = selectedRange;
+  if (results.every(Boolean)) updateStatus('Connected to backend');
+  return results.every(Boolean);
+}
+
+let metricsPollTimer: number | undefined;
+
 (window as any).loadSelectedRange = async () => {
   const select = document.getElementById('range-select') as HTMLSelectElement;
-  const display = document.getElementById('range-display');
-  if (display) display.textContent = select.value;
-  await loadHistory(select.value);
-  await loadGeoIPStats(select.value);
+  await refreshData(select.value);
 };
 
 (window as any).refreshData = async () => {
-  await loadMetrics();
-  const select = document.getElementById('range-select') as HTMLSelectElement;
-  const display = document.getElementById('range-display');
-  if (display) display.textContent = select.value;
-  await loadHistory(select.value);
-  await loadGeoIPStats(select.value);
+  await refreshData();
 };
 
-loadMetrics();
-loadHistory();
-loadGeoIPStats();
+async function connectAndLoad() {
+  updateStatus('Waiting for backend...');
+  try {
+    await invoke<void>('wait_for_backend');
+    const loaded = await refreshData();
+    if (!loaded) {
+      window.setTimeout(connectAndLoad, 2000);
+      return;
+    }
+    if (metricsPollTimer === undefined) {
+      metricsPollTimer = window.setInterval(() => {
+        void loadMetrics().then((loadedMetrics) => {
+          if (!loadedMetrics) void connectAndLoad();
+        });
+      }, 5000);
+    }
+  } catch (error) {
+    console.error('Backend did not become ready:', error);
+    updateStatus(`Backend unavailable: ${error}. Retrying...`);
+    window.setTimeout(connectAndLoad, 2000);
+  }
+}
 
-setInterval(() => {
-  loadMetrics();
-}, 5000);
+void connectAndLoad();
 
 console.log('Frontend loaded');

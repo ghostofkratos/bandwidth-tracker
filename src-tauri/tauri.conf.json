@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.bandwidth.tracker",
   "build": {
+    "devUrl": "http://127.0.0.1:1420",
     "frontendDist": "../dist",
     "beforeDevCommand": "pnpm dev",
     "beforeBuildCommand": "pnpm build"

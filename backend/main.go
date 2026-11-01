@@ -64,9 +64,10 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"download": metrics.Download,
-			"upload":   metrics.Upload,
-			"apps":     metrics.Apps,
+			"download":  metrics.Download,
+			"upload":    metrics.Upload,
+			"apps":      metrics.Apps,
+			"estimated": metrics.Estimated,
 		})
 	})
 
@@ -104,19 +105,24 @@ func main() {
 		json.NewEncoder(w).Encode(stats)
 	})
 
-	server := &http.Server{Addr: ":" + port}
+	server := &http.Server{Addr: "127.0.0.1:" + port}
+	serverErr := make(chan error, 1)
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server error: %v", err)
+			serverErr <- err
 		}
 	}()
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	select {
+	case <-sigCh:
+		log.Printf("Shutting down...")
+	case err := <-serverErr:
+		log.Printf("HTTP server stopped unexpectedly: %v", err)
+	}
 
-	log.Printf("Shutting down...")
 	cancel()
 	collectorWorker.Stop()
 	aggregatorWorker.Stop()

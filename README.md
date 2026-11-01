@@ -1,6 +1,6 @@
 # Bandwidth Tracker
 
-A cross-platform network bandwidth monitoring application with a Go backend and Tauri/React frontend. Tracks per-process network usage with GeoIP enrichment and automatic data aggregation.
+A Windows network bandwidth monitoring application with a Go backend and Tauri/TypeScript frontend. Tracks per-process network usage with GeoIP enrichment and automatic data aggregation.
 
 ## Features
 
@@ -15,7 +15,7 @@ A cross-platform network bandwidth monitoring application with a Go backend and 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  Frontend       │────▶│  Tauri/Rust      │────▶│  Go Sidecar     │
-│  (TypeScript)   │     │  (Commands)      │     │  (HTTP :8080)   │
+│  (TypeScript)   │     │  (Commands)      │     │  (loopback HTTP)│
 └─────────────────┘     └──────────────────┘     └────────┬────────┘
                                                           │
                               ┌───────────────────────────┘
@@ -73,27 +73,25 @@ bandwidth-tracker/
 
 ## Quick Start
 
-### 1. Backend Development
+### 1. Backend API Development
 
 ```bash
 cd backend
 go mod tidy
 go run main.go
-# Server starts on http://localhost:8080
-# Test: curl http://localhost:8080/health
-# Test: curl http://localhost:8080/api/metrics
+# Standalone backend listens on http://127.0.0.1:8080 by default
+# Check: curl http://127.0.0.1:8080/health
+# Check: curl http://127.0.0.1:8080/api/metrics
 ```
 
-### 2. Frontend Development
+### 2. Desktop App Development (recommended)
 
 ```bash
-# Terminal 1: Start backend
-cd backend && go run main.go
-
-# Terminal 2: Start Vite dev server
-pnpm dev
-# Frontend at http://localhost:5173 (proxied to backend)
+# From the project root: starts Vite and opens the Tauri desktop shell
+pnpm tauri:dev
 ```
+
+The frontend uses Tauri commands to reach the Go sidecar. Running `pnpm dev` by itself only serves the web assets; it does not provide the Tauri command bridge or a backend proxy.
 
 ### 3. Tauri Desktop App
 
@@ -107,10 +105,10 @@ cd ..
 pnpm build
 
 # Run Tauri dev (starts sidecar automatically)
-cd src-tauri
-cargo tauri dev
+pnpm tauri:dev
 
 # Or build release
+cd src-tauri
 cargo tauri build
 ```
 
@@ -120,7 +118,7 @@ All configuration via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `PORT` | `8080` | HTTP server port |
+| `PORT` | `8080` | Loopback HTTP server port (Tauri selects an available local port and passes it to the sidecar) |
 | `DB_PATH` | `%APPDATA%\bandwidth-tracker` | SQLite database directory |
 | `POLL_INTERVAL_SECONDS` | `5` | Collector polling interval |
 | `AGGREGATION_WINDOW_SECONDS` | `60` | `/api/metrics` time window |
@@ -143,13 +141,16 @@ All configuration via environment variables:
 **`/api/metrics`**
 ```json
 {
-  "download": 1048576,
-  "upload": 524288,
+  "download": 17476.27,
+  "upload": 8738.13,
+  "estimated": true,
   "apps": [
-    {"pid": 1234, "name": "chrome.exe", "download": 500000, "upload": 200000, "connections": 15, "country": "US"}
+    {"pid": 1234, "name": "chrome.exe", "download": 8333.33, "upload": 3333.33, "connections": 15, "country": "US"}
   ]
 }
 ```
+
+The `/api/metrics` download and upload fields are bytes per second averaged across the configured window. Current collector readings are estimates from active connections, not measured byte counters; `estimated` is true when samples are present.
 
 **`/api/history?range=24h`**
 ```json

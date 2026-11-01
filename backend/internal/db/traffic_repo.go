@@ -7,33 +7,34 @@ import (
 )
 
 type TrafficSample struct {
-	ID         int64
-	Timestamp  int64
-	ProcessID  int64
-	BytesIn    int64
-	BytesOut   int64
-	RemoteIP   string
-	RemotePort int32
-	LocalIP    string
-	LocalPort  int32
-	Protocol   string
-	Estimated  bool
+	ID          int64
+	Timestamp   int64
+	ProcessID   int64
+	BytesIn     int64
+	BytesOut    int64
+	RemoteIP    string
+	RemotePort  int32
+	LocalIP     string
+	LocalPort   int32
+	Protocol    string
+	Estimated   bool
 	CountryCode string
 }
 
 type AggregatedMetrics struct {
-	Download int64
-	Upload   int64
-	Apps     []AppMetrics
+	Download  float64      `json:"download"`
+	Upload    float64      `json:"upload"`
+	Apps      []AppMetrics `json:"apps"`
+	Estimated bool         `json:"estimated"`
 }
 
 type AppMetrics struct {
-	PID         int32
-	Name        string
-	Download    int64
-	Upload      int64
-	Connections int
-	Country     string
+	PID         int32   `json:"pid"`
+	Name        string  `json:"name"`
+	Download    float64 `json:"download"`
+	Upload      float64 `json:"upload"`
+	Connections int     `json:"connections"`
+	Country     string  `json:"country"`
 }
 
 type HistoryResponse struct {
@@ -41,6 +42,7 @@ type HistoryResponse struct {
 	Granularity string            `json:"granularity"`
 	Series      []HistoryPoint    `json:"series"`
 	Apps        []AppHistoryPoint `json:"apps"`
+	Estimated   bool              `json:"estimated"`
 }
 
 type HistoryPoint struct {
@@ -50,15 +52,16 @@ type HistoryPoint struct {
 }
 
 type AppHistoryPoint struct {
-	PID       int32  `json:"pid"`
-	Name      string `json:"name"`
-	Download  int64  `json:"download"`
-	Upload    int64  `json:"upload"`
-	Country   string `json:"country"`
+	PID      int32  `json:"pid"`
+	Name     string `json:"name"`
+	Download int64  `json:"download"`
+	Upload   int64  `json:"upload"`
+	Country  string `json:"country"`
 }
 
 type GeoIPStats struct {
 	Countries []CountryStats `json:"countries"`
+	Estimated bool           `json:"estimated"`
 }
 
 type CountryStats struct {
@@ -100,10 +103,13 @@ func GetSamplesSince(ctx context.Context, db *sql.DB, since int64) ([]TrafficSam
 }
 
 func GetAggregatedMetrics(ctx context.Context, db *sql.DB, windowSeconds int) (*AggregatedMetrics, error) {
+	if windowSeconds <= 0 {
+		windowSeconds = 60
+	}
 	since := time.Now().UnixMilli() - int64(windowSeconds)*1000
 
 	rows, err := db.QueryContext(ctx, `
-		SELECT p.pid, p.exe_name, SUM(ts.bytes_in), SUM(ts.bytes_out), COUNT(DISTINCT ts.remote_ip || ':' || ts.remote_port), ts.country_code
+		SELECT p.pid, p.exe_name, SUM(ts.bytes_in), SUM(ts.bytes_out), COUNT(DISTINCT ts.remote_ip || ':' || ts.remote_port), ts.country_code, MAX(ts.estimated)
 		FROM traffic_samples ts
 		JOIN processes p ON ts.process_id = p.id
 		WHERE ts.timestamp >= ?
@@ -114,12 +120,17 @@ func GetAggregatedMetrics(ctx context.Context, db *sql.DB, windowSeconds int) (*
 	}
 	defer rows.Close()
 
-	var metrics AggregatedMetrics
+	metrics := AggregatedMetrics{Apps: make([]AppMetrics, 0)}
 	for rows.Next() {
 		var a AppMetrics
-		if err := rows.Scan(&a.PID, &a.Name, &a.Download, &a.Upload, &a.Connections, &a.Country); err != nil {
+		var bytesIn, bytesOut int64
+		var estimated int
+		if err := rows.Scan(&a.PID, &a.Name, &bytesIn, &bytesOut, &a.Connections, &a.Country, &estimated); err != nil {
 			return nil, err
 		}
+		metrics.Estimated = metrics.Estimated || estimated != 0
+		a.Download = float64(bytesIn) / float64(windowSeconds)
+		a.Upload = float64(bytesOut) / float64(windowSeconds)
 		metrics.Download += a.Download
 		metrics.Upload += a.Upload
 		metrics.Apps = append(metrics.Apps, a)
@@ -175,7 +186,7 @@ func GetHistory(ctx context.Context, db *sql.DB, rangeStr string) (*HistoryRespo
 	}
 	defer seriesRows.Close()
 
-	var series []HistoryPoint
+	series := make([]HistoryPoint, 0)
 	for seriesRows.Next() {
 		var p HistoryPoint
 		if err := seriesRows.Scan(&p.Timestamp, &p.Download, &p.Upload); err != nil {
@@ -196,7 +207,7 @@ func GetHistory(ctx context.Context, db *sql.DB, rangeStr string) (*HistoryRespo
 	}
 	defer appsRows.Close()
 
-	var apps []AppHistoryPoint
+	apps := make([]AppHistoryPoint, 0)
 	for appsRows.Next() {
 		var a AppHistoryPoint
 		if err := appsRows.Scan(&a.PID, &a.Name, &a.Download, &a.Upload, &a.Country); err != nil {
@@ -210,6 +221,7 @@ func GetHistory(ctx context.Context, db *sql.DB, rangeStr string) (*HistoryRespo
 		Granularity: granularity,
 		Series:      series,
 		Apps:        apps,
+		Estimated:   len(series) > 0,
 	}, nil
 }
 
@@ -256,7 +268,7 @@ func GetGeoIPStats(ctx context.Context, db *sql.DB, rangeStr string) (*GeoIPStat
 	}
 	defer rows.Close()
 
-	var stats GeoIPStats
+	stats := GeoIPStats{Countries: make([]CountryStats, 0)}
 	for rows.Next() {
 		var c CountryStats
 		if err := rows.Scan(&c.CountryCode, &c.Download, &c.Upload); err != nil {
@@ -265,5 +277,6 @@ func GetGeoIPStats(ctx context.Context, db *sql.DB, rangeStr string) (*GeoIPStat
 		c.Total = c.Download + c.Upload
 		stats.Countries = append(stats.Countries, c)
 	}
+	stats.Estimated = len(stats.Countries) > 0
 	return &stats, rows.Err()
 }
